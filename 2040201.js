@@ -8,8 +8,8 @@
 // @grant        GM_download
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @updateURL    https://raw.githubusercontent.com/2603602/40401/main/amazon-to-google-sheets.user.js
-// @downloadURL  https://raw.githubusercontent.com/2603602/40401/main/amazon-to-google-sheets.user.js
+// @updateURL    https://raw.githubusercontent.com/2603602/40401/main/2040201.js
+// @downloadURL  https://raw.githubusercontent.com/2603602/40401/main/2040201.js
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @connect      m.media-amazon.com
