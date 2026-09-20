@@ -159,7 +159,7 @@
                 const blobUrl = URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.href = blobUrl;
-                link.download = `${data.asin}.jpg`;
+                link.download = `goodsbrell-${data.asin}.jpg`;
                 link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
@@ -186,13 +186,13 @@
         try {
             GM_download({
                 url: data.image,
-                name: `${data.asin}.jpg`,
+                name: `goodsbrell-${data.asin}.jpg`,
                 saveAs: false,
                 onload: () => {
                     if (settled) return;
                     settled = true;
                     clearTimeout(fallbackTimer);
-                    console.log(`Image saved: ${data.asin}.jpg`);
+                    console.log(`Image saved: goodsbrell-${data.asin}.jpg`);
                 },
                 onerror: error => {
                     if (settled) return;
