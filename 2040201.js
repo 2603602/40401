@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.5.1
+// @version      1.5.2
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @updateURL    https://raw.githubusercontent.com/2603602/40401/refs/heads/main/2040201.js
 // @downloadURL  https://raw.githubusercontent.com/2603602/40401/refs/heads/main/2040201.js
 // @connect      script.google.com
