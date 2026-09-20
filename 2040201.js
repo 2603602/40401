@@ -44,7 +44,7 @@
         const savedToken = (GM_getValue(AUTH_TOKEN_KEY, '') || '').trim();
         if (savedToken) return savedToken;
         const enteredToken = (window.prompt(
-            'Amazon → Google Sheets\\n\\nPaste your authentication token:'
+            'Amazon → Google Sheets\n\nPaste your authentication token:'
         ) || '').trim();
         if (!enteredToken) return '';
         GM_setValue(AUTH_TOKEN_KEY, enteredToken);
