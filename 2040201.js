@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.4.11
+// @version      1.5
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -19,6 +19,51 @@
     'use strict';
 
     const GOOGLE_SCRIPT_URL_KEY = 'googleScriptUrl';
+    const AUTH_TOKEN_KEY = 'authToken';
+
+    function isValidGoogleScriptUrl(url) {
+        return url.startsWith('https://script.google.com/macros/s/') && url.endsWith('/exec');
+    }
+
+    function changeGoogleScriptUrl() {
+        const currentUrl = (GM_getValue(GOOGLE_SCRIPT_URL_KEY, '') || '').trim();
+        const enteredUrl = (window.prompt(
+            'Amazon → Google Sheets\\n\\nPaste your deployed Google Apps Script Web App URL ending in /exec:',
+            currentUrl
+        ) || '').trim();
+        if (!enteredUrl) return;
+        if (!isValidGoogleScriptUrl(enteredUrl)) {
+            window.alert('Invalid Google Apps Script URL. Expected https://script.google.com/macros/s/.../exec');
+            return;
+        }
+        GM_setValue(GOOGLE_SCRIPT_URL_KEY, enteredUrl);
+        window.alert('Google Apps Script URL saved.');
+    }
+
+    function getAuthToken() {
+        const savedToken = (GM_getValue(AUTH_TOKEN_KEY, '') || '').trim();
+        if (savedToken) return savedToken;
+        const enteredToken = (window.prompt(
+            'Amazon → Google Sheets\\n\\nPaste your authentication token:'
+        ) || '').trim();
+        if (!enteredToken) return '';
+        GM_setValue(AUTH_TOKEN_KEY, enteredToken);
+        return enteredToken;
+    }
+
+    function changeAuthToken() {
+        const enteredToken = (window.prompt(
+            'Amazon → Google Sheets\\n\\nPaste the new authentication token:'
+        ) || '').trim();
+        if (!enteredToken) return;
+        GM_setValue(AUTH_TOKEN_KEY, enteredToken);
+        window.alert('Authentication token saved.');
+    }
+
+    if (typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand('Change Apps Script URL', changeGoogleScriptUrl);
+        GM_registerMenuCommand('Change authentication token', changeAuthToken);
+    }
 
     function getGoogleScriptUrl() {
         const savedUrl = (GM_getValue(GOOGLE_SCRIPT_URL_KEY, '') || '').trim();
@@ -35,10 +80,7 @@
             return '';
         }
 
-        if (
-            !enteredUrl.startsWith('https://script.google.com/macros/s/') ||
-            !enteredUrl.endsWith('/exec')
-        ) {
+        if (!isValidGoogleScriptUrl(enteredUrl)) {
             window.alert('Invalid Google Apps Script URL. Expected https://script.google.com/macros/s/.../exec');
             return '';
         }
@@ -258,6 +300,16 @@
             return;
         }
 
+        const authToken = getAuthToken();
+
+        if (!authToken) {
+            console.error('Authentication token is not configured.');
+            setButtonState(button, 'error');
+            return;
+        }
+
+        const requestData = { ...data, token: authToken };
+
         setButtonState(button, 'sending');
 
         GM_xmlhttpRequest({
@@ -274,7 +326,7 @@
                 'Content-Type': 'application/json'
             },
 
-            data: JSON.stringify(data),
+            data: JSON.stringify(requestData),
 
             onload: function (response) {
                 // Some environments may expose a direct successful response.
