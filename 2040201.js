@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.5.4
+// @version      1.5.5
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -152,21 +152,38 @@
     function downloadViaBlob(data) {
         fetch(data.image)
             .then(response => {
-                if (!response.ok) throw new Error(`Image fetch failed: HTTP ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`Image fetch failed: HTTP ${response.status}`);
+                }
                 return response.blob();
             })
             .then(blob => {
+                const extensionByMime = {
+                    'image/jpeg': 'jpg',
+                    'image/webp': 'webp',
+                    'image/png': 'png',
+                    'image/gif': 'gif',
+                    'image/avif': 'avif'
+                };
+
+                const extension = extensionByMime[blob.type] || 'img';
+
                 const blobUrl = URL.createObjectURL(blob);
                 const link = document.createElement('a');
+
                 link.href = blobUrl;
-                link.download = `goodsbrell-${data.asin}.jpg`;
+                link.download = `AMZ_${data.asin}.${extension}`;
                 link.style.display = 'none';
+
                 document.body.appendChild(link);
                 link.click();
                 link.remove();
+
                 setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
             })
-            .catch(error => console.error('Blob image download error:', error));
+            .catch(error => {
+                console.error('Blob image download error:', error);
+            });
     }
 
     function downloadProductImage(data) {
