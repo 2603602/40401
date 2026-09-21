@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.5.7
+// @version      1.5.8
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -537,7 +537,7 @@
 
             requestResearchAction('markViewed', { row: item.row }, () => {
                 requestResearchAction('getNextResearch', {}, result => {
-                    const nextItem = result.item || null;
+                    const nextItem = result.task || null;
                     renderResearchPanel(nextItem);
 
                     if (nextItem) {
@@ -564,7 +564,7 @@
 
     function initResearchQueuePanel() {
         requestResearchAction('getNextResearch', {}, result => {
-            renderResearchPanel(result.item || null);
+            renderResearchPanel(result.task || null);
         });
     }
 
