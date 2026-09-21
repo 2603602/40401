@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.5.6
+// @version      1.5.7
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -152,38 +152,21 @@
     function downloadViaBlob(data) {
         fetch(data.image)
             .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Image fetch failed: HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`Image fetch failed: HTTP ${response.status}`);
                 return response.blob();
             })
             .then(blob => {
-                const extensionByMime = {
-                    'image/jpeg': 'jpg',
-                    'image/webp': 'webp',
-                    'image/png': 'png',
-                    'image/gif': 'gif',
-                    'image/avif': 'avif'
-                };
-
-                const extension = extensionByMime[blob.type] || 'img';
-
                 const blobUrl = URL.createObjectURL(blob);
                 const link = document.createElement('a');
-
                 link.href = blobUrl;
-                link.download = `goodsbrell-${data.asin}.${extension}`;
+                link.download = `goodsbrell-${data.asin}.jpg`;
                 link.style.display = 'none';
-
                 document.body.appendChild(link);
                 link.click();
                 link.remove();
-
                 setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
             })
-            .catch(error => {
-                console.error('Blob image download error:', error);
-            });
+            .catch(error => console.error('Blob image download error:', error));
     }
 
     function downloadProductImage(data) {
@@ -398,6 +381,193 @@
         });
     }
 
+
+    const RESEARCH_PANEL_ID = 'amazon-research-queue-panel';
+
+    function buildAmazonSearchUrl(seedKeyword, urlOverride) {
+        const override = (urlOverride || '').trim();
+        if (override) return override;
+
+        const keyword = (seedKeyword || '').trim();
+        if (!keyword) return 'https://www.amazon.com/';
+
+        return `https://www.amazon.com/s?k=${encodeURIComponent(keyword)}&s=exact-aware-popularity-rank`;
+    }
+
+    function requestResearchAction(action, payload = {}, onSuccess) {
+        const googleScriptUrl = getGoogleScriptUrl();
+        if (!googleScriptUrl) return;
+
+        const authToken = getAuthToken();
+        if (!authToken) return;
+
+        const requestData = {
+            action,
+            token: authToken,
+            ...payload
+        };
+
+        GM_xmlhttpRequest({
+            method: 'POST',
+            url: googleScriptUrl,
+            redirect: 'manual',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            data: JSON.stringify(requestData),
+
+            onload: function (response) {
+                const handle = (r) => {
+                    try {
+                        const result = JSON.parse(r.responseText || '{}');
+                        if (result.success === true) {
+                            onSuccess?.(result);
+                        } else {
+                            console.error('Research Queue error:', result.error || result);
+                        }
+                    } catch (error) {
+                        console.error('Invalid Research Queue response:', error, r.responseText);
+                    }
+                };
+
+                if (response.status >= 200 && response.status < 300) {
+                    handle(response);
+                    return;
+                }
+
+                if ([301, 302, 303, 307, 308].includes(response.status)) {
+                    const headers = parseHeaders(response.responseHeaders);
+                    const location = headers.location;
+                    if (!location) {
+                        console.error('Research Queue redirect without Location header.');
+                        return;
+                    }
+
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url: location,
+                        redirect: 'follow',
+                        onload: handle,
+                        onerror: error => console.error('Research Queue redirect network error:', error)
+                    });
+                    return;
+                }
+
+                console.error('Research Queue HTTP error:', response.status, response.responseText);
+            },
+
+            onerror: function (error) {
+                console.error('Research Queue network error:', error);
+            }
+        });
+    }
+
+    function renderResearchPanel(item) {
+        let panel = document.getElementById(RESEARCH_PANEL_ID);
+
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = RESEARCH_PANEL_ID;
+
+            Object.assign(panel.style, {
+                position: 'fixed',
+                right: '12px',
+                bottom: '12px',
+                zIndex: '2147483647',
+                width: '280px',
+                padding: '12px',
+                background: '#fff',
+                border: '1px solid #888',
+                borderRadius: '8px',
+                boxShadow: '0 2px 10px rgba(0,0,0,.18)',
+                fontFamily: 'Arial, sans-serif',
+                fontSize: '13px',
+                lineHeight: '1.35'
+            });
+
+            document.body.appendChild(panel);
+        }
+
+        panel.innerHTML = '';
+
+        const title = document.createElement('div');
+        title.textContent = item
+            ? `${item.event || ''} → ${item.microTheme || ''}`
+            : 'Research Queue';
+        title.style.fontWeight = '700';
+        title.style.marginBottom = '6px';
+
+        const role = document.createElement('div');
+        role.textContent = item ? (item.productRole || '') : 'No unviewed items';
+
+        const keyword = document.createElement('div');
+        keyword.textContent = item ? (item.seedKeyword || '') : '';
+        keyword.style.opacity = '0.75';
+        keyword.style.margin = '4px 0 10px';
+
+        panel.appendChild(title);
+        panel.appendChild(role);
+        panel.appendChild(keyword);
+
+        if (!item) return;
+
+        const buttons = document.createElement('div');
+        buttons.style.display = 'flex';
+        buttons.style.gap = '8px';
+
+        const viewedButton = document.createElement('button');
+        viewedButton.textContent = '✓ Viewed';
+
+        const openButton = document.createElement('button');
+        openButton.textContent = 'Open';
+
+        [viewedButton, openButton].forEach(button => {
+            Object.assign(button.style, {
+                padding: '6px 10px',
+                border: '1px solid #888',
+                borderRadius: '6px',
+                background: '#fff',
+                cursor: 'pointer'
+            });
+        });
+
+        viewedButton.addEventListener('click', () => {
+            viewedButton.disabled = true;
+            viewedButton.textContent = 'Saving...';
+
+            requestResearchAction('markViewed', { row: item.row }, () => {
+                requestResearchAction('getNextResearch', {}, result => {
+                    const nextItem = result.item || null;
+                    renderResearchPanel(nextItem);
+
+                    if (nextItem) {
+                        window.location.href = buildAmazonSearchUrl(
+                            nextItem.seedKeyword,
+                            nextItem.urlOverride
+                        );
+                    }
+                });
+            });
+        });
+
+        openButton.addEventListener('click', () => {
+            window.location.href = buildAmazonSearchUrl(
+                item.seedKeyword,
+                item.urlOverride
+            );
+        });
+
+        buttons.appendChild(viewedButton);
+        buttons.appendChild(openButton);
+        panel.appendChild(buttons);
+    }
+
+    function initResearchQueuePanel() {
+        requestResearchAction('getNextResearch', {}, result => {
+            renderResearchPanel(result.item || null);
+        });
+    }
+
     function addButtonToCard(card) {
         if (card.querySelector(`.${BUTTON_CLASS}`)) return;
 
@@ -460,6 +630,7 @@
     }
 
     scanProducts();
+    initResearchQueuePanel();
 
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.body, {
