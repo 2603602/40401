@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.5.5
+// @version      1.5.6
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -172,7 +172,7 @@
                 const link = document.createElement('a');
 
                 link.href = blobUrl;
-                link.download = `AMZ_${data.asin}.${extension}`;
+                link.download = `goodsbrell-${data.asin}.${extension}`;
                 link.style.display = 'none';
 
                 document.body.appendChild(link);
