@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.6.0
+// @version      1.6.1
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -408,7 +408,8 @@
         panelWidth: '390px',
         panelMaxHeight: '72vh',
         right: '12px',
-        bottom: '12px'
+        bottom: '12px',
+        fullscreenPadding: '12px'
     };
 
     const RESEARCH_LABELS = {
@@ -421,7 +422,11 @@
         featured: 'Featured',
         newest: 'Newest',
         priceLow: 'Price ↑',
-        priceHigh: 'Price ↓'
+        priceHigh: 'Price ↓',
+        fullscreen: '⛶',
+        exitFullscreen: '🗗',
+        expandAll: 'Expand all',
+        collapseAll: 'Collapse all'
     };
 
     const AMAZON_SORTS = [
@@ -459,6 +464,7 @@
 
     let researchTasks = [];
     let isResearchPanelOpen = false;
+    let isResearchPanelFullscreen = false;
 
     // =========================================================
     // Research Queue data
@@ -1102,6 +1108,44 @@
         });
     }
 
+    function applyResearchPanelSize(panel) {
+        if (isResearchPanelFullscreen) {
+            panel.style.top = RESEARCH_UI.fullscreenPadding;
+            panel.style.left = RESEARCH_UI.fullscreenPadding;
+            panel.style.right = RESEARCH_UI.fullscreenPadding;
+            panel.style.bottom = RESEARCH_UI.fullscreenPadding;
+            panel.style.width = 'auto';
+            panel.style.maxHeight = 'none';
+            panel.style.height = 'auto';
+            return;
+        }
+
+        panel.style.top = 'auto';
+        panel.style.left = 'auto';
+        panel.style.right = RESEARCH_UI.right;
+        panel.style.bottom = '54px';
+        panel.style.width =
+            'min(' +
+            RESEARCH_UI.panelWidth +
+            ', calc(100vw - 24px))';
+        panel.style.maxHeight = RESEARCH_UI.panelMaxHeight;
+        panel.style.height = 'auto';
+    }
+
+    function toggleResearchPanelFullscreen() {
+        isResearchPanelFullscreen = !isResearchPanelFullscreen;
+        renderResearchPanel();
+    }
+
+    function setAllMicroThemesExpanded(shouldExpand) {
+        const panel = createResearchPanel();
+        const detailElements = panel.querySelectorAll('details');
+
+        detailElements.forEach(function (detailsElement) {
+            detailsElement.open = shouldExpand;
+        });
+    }
+
     function renderResearchPanel() {
         const launcher = createResearchLauncher();
         const panel = createResearchPanel();
@@ -1111,6 +1155,8 @@
         panel.style.display = isResearchPanelOpen
             ? 'block'
             : 'none';
+
+        applyResearchPanelSize(panel);
 
         if (!isResearchPanelOpen) {
             return;
@@ -1131,6 +1177,50 @@
         const title = document.createElement('strong');
         title.textContent = 'Research Queue';
 
+        const controls = document.createElement('div');
+
+        Object.assign(controls.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end'
+        });
+
+        const expandAllButton = document.createElement('button');
+        expandAllButton.type = 'button';
+        expandAllButton.textContent = RESEARCH_LABELS.expandAll;
+        expandAllButton.title = 'Expand all micro-themes';
+        applyResearchButtonStyle(expandAllButton);
+
+        expandAllButton.addEventListener('click', function () {
+            setAllMicroThemesExpanded(true);
+        });
+
+        const collapseAllButton = document.createElement('button');
+        collapseAllButton.type = 'button';
+        collapseAllButton.textContent = RESEARCH_LABELS.collapseAll;
+        collapseAllButton.title = 'Collapse all micro-themes';
+        applyResearchButtonStyle(collapseAllButton);
+
+        collapseAllButton.addEventListener('click', function () {
+            setAllMicroThemesExpanded(false);
+        });
+
+        const fullscreenButton = document.createElement('button');
+        fullscreenButton.type = 'button';
+        fullscreenButton.textContent = isResearchPanelFullscreen
+            ? RESEARCH_LABELS.exitFullscreen
+            : RESEARCH_LABELS.fullscreen;
+        fullscreenButton.title = isResearchPanelFullscreen
+            ? 'Exit fullscreen'
+            : 'Open fullscreen';
+        applyResearchButtonStyle(fullscreenButton);
+
+        fullscreenButton.addEventListener('click', function () {
+            toggleResearchPanelFullscreen();
+        });
+
         const refreshButton = document.createElement('button');
         refreshButton.type = 'button';
         refreshButton.textContent = '↻';
@@ -1147,8 +1237,13 @@
             });
         });
 
+        controls.appendChild(expandAllButton);
+        controls.appendChild(collapseAllButton);
+        controls.appendChild(fullscreenButton);
+        controls.appendChild(refreshButton);
+
         header.appendChild(title);
-        header.appendChild(refreshButton);
+        header.appendChild(controls);
         panel.appendChild(header);
 
         if (researchTasks.length === 0) {
