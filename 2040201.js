@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.6.2
+// @version      1.6.3
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -427,7 +427,8 @@
         exitFullscreen: '🗗',
         expandAll: 'Expand all',
         collapseAll: 'Collapse all',
-        minimizePanel: '−'
+        minimizePanel: '−',
+        currentGroup: 'YOU ARE HERE'
     };
 
     const AMAZON_SORTS = [
@@ -792,9 +793,10 @@
             borderRadius: '6px',
             background: '#fff',
             color: '#111',
-            padding: '5px 8px',
+            padding: '4px 8px',
             cursor: 'pointer',
-            fontSize: '12px'
+            fontSize: '12px',
+            whiteSpace: 'nowrap'
         });
     }
 
@@ -1031,6 +1033,12 @@
         return row;
     }
 
+    function doesMicroThemeContainCurrentPage(tasks) {
+        return tasks.some(function (task) {
+            return doesTaskMatchCurrentPage(task);
+        });
+    }
+
     function shouldMicroThemeStartOpen(tasks, isFirstIncompleteTheme) {
         const containsCurrentPage = tasks.some(function (task) {
             return doesTaskMatchCurrentPage(task);
@@ -1064,13 +1072,31 @@
             padding: '7px 2px'
         });
 
-        summary.textContent =
+        const summaryText = document.createElement('span');
+        summaryText.textContent =
             microThemeGroup.name +
             ' — ' +
             progress.viewed +
             '/' +
             progress.total +
             ' viewed';
+
+        summary.appendChild(summaryText);
+
+        if (doesMicroThemeContainCurrentPage(microThemeGroup.tasks)) {
+            const currentGroupBadge = document.createElement('span');
+            currentGroupBadge.textContent =
+                ' · ' + RESEARCH_LABELS.currentGroup;
+
+            Object.assign(currentGroupBadge.style, {
+                marginLeft: '4px',
+                fontSize: '10px',
+                fontWeight: '700',
+                color: '#067d62'
+            });
+
+            summary.appendChild(currentGroupBadge);
+        }
 
         details.appendChild(summary);
 
@@ -1194,27 +1220,46 @@
             position: 'sticky',
             top: '0',
             zIndex: '5',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '8px',
             margin: '-10px -10px 6px',
             padding: '10px',
             background: '#fff',
             borderBottom: '1px solid #ddd'
         });
 
+        const headerTopRow = document.createElement('div');
+
+        Object.assign(headerTopRow.style, {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px'
+        });
+
         const title = document.createElement('strong');
         title.textContent = 'Research Queue';
 
-        const controls = document.createElement('div');
+        Object.assign(title.style, {
+            whiteSpace: 'nowrap',
+            flex: '0 0 auto'
+        });
 
-        Object.assign(controls.style, {
+        const iconControls = document.createElement('div');
+
+        Object.assign(iconControls.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexWrap: 'nowrap'
+        });
+
+        const actionControls = document.createElement('div');
+
+        Object.assign(actionControls.style, {
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
             flexWrap: 'wrap',
-            justifyContent: 'flex-end'
+            marginTop: '8px'
         });
 
         const expandAllButton = document.createElement('button');
@@ -1290,14 +1335,18 @@
             );
         });
 
-        controls.appendChild(expandAllButton);
-        controls.appendChild(collapseAllButton);
-        controls.appendChild(fullscreenButton);
-        controls.appendChild(refreshButton);
-        controls.appendChild(minimizeButton);
+        iconControls.appendChild(fullscreenButton);
+        iconControls.appendChild(refreshButton);
+        iconControls.appendChild(minimizeButton);
 
-        header.appendChild(title);
-        header.appendChild(controls);
+        actionControls.appendChild(expandAllButton);
+        actionControls.appendChild(collapseAllButton);
+
+        headerTopRow.appendChild(title);
+        headerTopRow.appendChild(iconControls);
+
+        header.appendChild(headerTopRow);
+        header.appendChild(actionControls);
         panel.appendChild(header);
 
         if (researchTasks.length === 0) {
