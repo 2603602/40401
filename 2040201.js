@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.5.8
+// @version      1.6.0
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,6 +18,22 @@
 
 (function () {
     'use strict';
+
+    /*
+     * Amazon research and product collector.
+     *
+     * Responsibilities:
+     * - show Research Queue grouped by Event and Micro-theme;
+     * - open Amazon searches with selectable sorting;
+     * - toggle Viewed without forcing navigation;
+     * - save selected Amazon products to Google Sheets.
+     *
+     * Common manual edits:
+     * - RESEARCH_UI: panel size and position;
+     * - RESEARCH_LABELS: visible labels;
+     * - AMAZON_SORTS: search sorting links.
+     */
+
 
     const GOOGLE_SCRIPT_URL_KEY = 'googleScriptUrl';
     const AUTH_TOKEN_KEY = 'authToken';
@@ -382,30 +398,169 @@
     }
 
 
-    const RESEARCH_PANEL_ID = 'amazon-research-queue-panel';
+    // =========================================================
+    // Research Queue configuration
+    // =========================================================
 
-    function buildAmazonSearchUrl(seedKeyword, urlOverride) {
-        const override = (urlOverride || '').trim();
-        if (override) return override;
+    const RESEARCH_UI = {
+        launcherId: 'amazon-research-launcher',
+        panelId: 'amazon-research-panel',
+        panelWidth: '390px',
+        panelMaxHeight: '72vh',
+        right: '12px',
+        bottom: '12px'
+    };
 
-        const keyword = (seedKeyword || '').trim();
-        if (!keyword) return 'https://www.amazon.com/';
+    const RESEARCH_LABELS = {
+        launcher: 'Research',
+        loading: 'Loading…',
+        emptyQueue: 'Research Queue is empty',
+        currentPage: 'YOU ARE HERE',
+        best: 'Best',
+        reviews: 'Reviews',
+        featured: 'Featured',
+        newest: 'Newest',
+        priceLow: 'Price ↑',
+        priceHigh: 'Price ↓'
+    };
 
-        return `https://www.amazon.com/s?k=${encodeURIComponent(keyword)}&s=exact-aware-popularity-rank`;
+    const AMAZON_SORTS = [
+        {
+            id: 'best',
+            label: RESEARCH_LABELS.best,
+            value: 'exact-aware-popularity-rank'
+        },
+        {
+            id: 'reviews',
+            label: RESEARCH_LABELS.reviews,
+            value: 'review-rank'
+        },
+        {
+            id: 'featured',
+            label: RESEARCH_LABELS.featured,
+            value: ''
+        },
+        {
+            id: 'newest',
+            label: RESEARCH_LABELS.newest,
+            value: 'date-desc-rank'
+        },
+        {
+            id: 'priceLow',
+            label: RESEARCH_LABELS.priceLow,
+            value: 'price-asc-rank'
+        },
+        {
+            id: 'priceHigh',
+            label: RESEARCH_LABELS.priceHigh,
+            value: 'price-desc-rank'
+        }
+    ];
+
+    let researchTasks = [];
+    let isResearchPanelOpen = false;
+
+    // =========================================================
+    // Research Queue data
+    // =========================================================
+
+    function normalizeSearchKeyword(value) {
+        return String(value || '')
+            .trim()
+            .replace(/\s+/g, ' ')
+            .toLowerCase();
     }
 
-    function requestResearchAction(action, payload = {}, onSuccess) {
+    function getCurrentAmazonSearchState() {
+        const currentUrl = new URL(window.location.href);
+
+        return {
+            keyword: normalizeSearchKeyword(
+                currentUrl.searchParams.get('k') || ''
+            ),
+            sort: currentUrl.searchParams.get('s') || ''
+        };
+    }
+
+    function buildAmazonSearchUrl(task, sortValue) {
+        const hasOverride = String(task.urlOverride || '').trim() !== '';
+        let searchUrl;
+
+        if (hasOverride) {
+            searchUrl = new URL(task.urlOverride, 'https://www.amazon.com/');
+        } else {
+            searchUrl = new URL('https://www.amazon.com/s');
+            searchUrl.searchParams.set('k', task.seedKeyword || '');
+        }
+
+        if (sortValue) {
+            searchUrl.searchParams.set('s', sortValue);
+        } else {
+            searchUrl.searchParams.delete('s');
+        }
+
+        return searchUrl.toString();
+    }
+
+    function requestResearchAction(action, payload, onSuccess, onError) {
         const googleScriptUrl = getGoogleScriptUrl();
-        if (!googleScriptUrl) return;
+
+        if (!googleScriptUrl) {
+            return;
+        }
 
         const authToken = getAuthToken();
-        if (!authToken) return;
+
+        if (!authToken) {
+            return;
+        }
 
         const requestData = {
-            action,
-            token: authToken,
-            ...payload
+            action: action,
+            token: authToken
         };
+
+        Object.keys(payload || {}).forEach(function (key) {
+            requestData[key] = payload[key];
+        });
+
+        function handleResponse(response) {
+            try {
+                const responseText =
+                    typeof response.responseText === 'string'
+                        ? response.responseText
+                        : '';
+
+                const result = JSON.parse(responseText);
+
+                if (result.success === true) {
+                    if (typeof onSuccess === 'function') {
+                        onSuccess(result);
+                    }
+                    return;
+                }
+
+                const message =
+                    result.error ||
+                    'Google Apps Script could not complete the Research Queue action.';
+
+                console.error('Research Queue error:', message);
+
+                if (typeof onError === 'function') {
+                    onError(message);
+                }
+            } catch (error) {
+                console.error(
+                    'Google Apps Script returned an invalid Research Queue response:',
+                    response.responseText,
+                    error
+                );
+
+                if (typeof onError === 'function') {
+                    onError('Invalid Research Queue response.');
+                }
+            }
+        }
 
         GM_xmlhttpRequest({
             method: 'POST',
@@ -417,155 +572,608 @@
             data: JSON.stringify(requestData),
 
             onload: function (response) {
-                const handle = (r) => {
-                    try {
-                        const result = JSON.parse(r.responseText || '{}');
-                        if (result.success === true) {
-                            onSuccess?.(result);
-                        } else {
-                            console.error('Research Queue error:', result.error || result);
+                const isDirectSuccess =
+                    response.status >= 200 &&
+                    response.status < 300;
+
+                if (isDirectSuccess) {
+                    handleResponse(response);
+                    return;
+                }
+
+                const isRedirect = [
+                    301,
+                    302,
+                    303,
+                    307,
+                    308
+                ].includes(response.status);
+
+                if (!isRedirect) {
+                    const message =
+                        'Could not complete the Research Queue request. HTTP ' +
+                        response.status;
+
+                    console.error(message, response.responseText);
+
+                    if (typeof onError === 'function') {
+                        onError(message);
+                    }
+                    return;
+                }
+
+                const headers = parseHeaders(response.responseHeaders);
+                const redirectLocation = headers.location;
+
+                if (!redirectLocation) {
+                    const message =
+                        'Research Queue redirect did not include a Location header.';
+
+                    console.error(message);
+
+                    if (typeof onError === 'function') {
+                        onError(message);
+                    }
+                    return;
+                }
+
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: redirectLocation,
+                    redirect: 'follow',
+                    onload: handleResponse,
+
+                    onerror: function (error) {
+                        console.error(
+                            'Could not read the Research Queue redirect response:',
+                            error
+                        );
+
+                        if (typeof onError === 'function') {
+                            onError(
+                                'Could not read the Research Queue response.'
+                            );
                         }
-                    } catch (error) {
-                        console.error('Invalid Research Queue response:', error, r.responseText);
                     }
-                };
-
-                if (response.status >= 200 && response.status < 300) {
-                    handle(response);
-                    return;
-                }
-
-                if ([301, 302, 303, 307, 308].includes(response.status)) {
-                    const headers = parseHeaders(response.responseHeaders);
-                    const location = headers.location;
-                    if (!location) {
-                        console.error('Research Queue redirect without Location header.');
-                        return;
-                    }
-
-                    GM_xmlhttpRequest({
-                        method: 'GET',
-                        url: location,
-                        redirect: 'follow',
-                        onload: handle,
-                        onerror: error => console.error('Research Queue redirect network error:', error)
-                    });
-                    return;
-                }
-
-                console.error('Research Queue HTTP error:', response.status, response.responseText);
+                });
             },
 
             onerror: function (error) {
-                console.error('Research Queue network error:', error);
+                console.error(
+                    'Could not connect to Google Apps Script for Research Queue:',
+                    error
+                );
+
+                if (typeof onError === 'function') {
+                    onError('Could not connect to Research Queue.');
+                }
             }
         });
     }
 
-    function renderResearchPanel(item) {
-        let panel = document.getElementById(RESEARCH_PANEL_ID);
+    function loadResearchQueue(onLoaded) {
+        requestResearchAction(
+            'getResearchQueue',
+            {},
+            function (result) {
+                researchTasks = Array.isArray(result.tasks)
+                    ? result.tasks
+                    : [];
 
-        if (!panel) {
-            panel = document.createElement('div');
-            panel.id = RESEARCH_PANEL_ID;
+                updateResearchLauncher();
+                renderResearchPanel();
 
-            Object.assign(panel.style, {
-                position: 'fixed',
-                right: '12px',
-                bottom: '12px',
-                zIndex: '2147483647',
-                width: '280px',
-                padding: '12px',
-                background: '#fff',
-                border: '1px solid #888',
-                borderRadius: '8px',
-                boxShadow: '0 2px 10px rgba(0,0,0,.18)',
-                fontFamily: 'Arial, sans-serif',
-                fontSize: '13px',
-                lineHeight: '1.35'
+                if (typeof onLoaded === 'function') {
+                    onLoaded(researchTasks);
+                }
+            },
+            function (message) {
+                renderResearchPanelMessage(message);
+            }
+        );
+    }
+
+    function setResearchTaskViewed(task, shouldBeViewed, checkbox) {
+        checkbox.disabled = true;
+
+        requestResearchAction(
+            'setResearchViewed',
+            {
+                row: task.row,
+                seedKeyword: task.seedKeyword,
+                viewed: shouldBeViewed
+            },
+            function () {
+                task.viewed = shouldBeViewed;
+                checkbox.checked = shouldBeViewed;
+                checkbox.disabled = false;
+
+                updateResearchLauncher();
+                renderResearchPanel();
+            },
+            function () {
+                checkbox.checked = task.viewed === true;
+                checkbox.disabled = false;
+            }
+        );
+    }
+
+    // =========================================================
+    // Research Queue grouping
+    // =========================================================
+
+    function groupResearchTasksByEventAndTheme(tasks) {
+        const events = [];
+
+        tasks.forEach(function (task) {
+            let eventGroup = events.find(function (item) {
+                return item.name === task.event;
             });
 
-            document.body.appendChild(panel);
+            if (!eventGroup) {
+                eventGroup = {
+                    name: task.event || 'Unspecified event',
+                    microThemes: []
+                };
+                events.push(eventGroup);
+            }
+
+            let microThemeGroup = eventGroup.microThemes.find(function (item) {
+                return item.name === task.microTheme;
+            });
+
+            if (!microThemeGroup) {
+                microThemeGroup = {
+                    name: task.microTheme || 'Unspecified micro-theme',
+                    tasks: []
+                };
+                eventGroup.microThemes.push(microThemeGroup);
+            }
+
+            microThemeGroup.tasks.push(task);
+        });
+
+        return events;
+    }
+
+    function getMicroThemeProgress(tasks) {
+        const viewedCount = tasks.filter(function (task) {
+            return task.viewed === true;
+        }).length;
+
+        return {
+            viewed: viewedCount,
+            total: tasks.length
+        };
+    }
+
+    function doesTaskMatchCurrentPage(task) {
+        const currentState = getCurrentAmazonSearchState();
+        const taskKeyword = normalizeSearchKeyword(task.seedKeyword);
+
+        return (
+            taskKeyword !== '' &&
+            taskKeyword === currentState.keyword
+        );
+    }
+
+    function isSortCurrent(task, sortValue) {
+        if (!doesTaskMatchCurrentPage(task)) {
+            return false;
+        }
+
+        const currentState = getCurrentAmazonSearchState();
+
+        return currentState.sort === sortValue;
+    }
+
+    // =========================================================
+    // Research Queue UI
+    // =========================================================
+
+    function applyResearchButtonStyle(button) {
+        Object.assign(button.style, {
+            border: '1px solid #888',
+            borderRadius: '6px',
+            background: '#fff',
+            color: '#111',
+            padding: '5px 8px',
+            cursor: 'pointer',
+            fontSize: '12px'
+        });
+    }
+
+    function createResearchLauncher() {
+        let launcher = document.getElementById(RESEARCH_UI.launcherId);
+
+        if (launcher) {
+            return launcher;
+        }
+
+        launcher = document.createElement('button');
+        launcher.id = RESEARCH_UI.launcherId;
+        launcher.type = 'button';
+
+        Object.assign(launcher.style, {
+            position: 'fixed',
+            right: RESEARCH_UI.right,
+            bottom: RESEARCH_UI.bottom,
+            zIndex: '2147483647',
+            border: '1px solid #777',
+            borderRadius: '8px',
+            background: '#fff',
+            color: '#111',
+            padding: '8px 12px',
+            boxShadow: '0 2px 10px rgba(0,0,0,.18)',
+            fontFamily: 'Arial, sans-serif',
+            fontSize: '13px',
+            fontWeight: '700',
+            cursor: 'pointer'
+        });
+
+        launcher.addEventListener('click', function () {
+            isResearchPanelOpen = !isResearchPanelOpen;
+            renderResearchPanel();
+        });
+
+        document.body.appendChild(launcher);
+
+        return launcher;
+    }
+
+    function updateResearchLauncher() {
+        const launcher = createResearchLauncher();
+
+        const totalCount = researchTasks.length;
+        const viewedCount = researchTasks.filter(function (task) {
+            return task.viewed === true;
+        }).length;
+
+        if (totalCount === 0) {
+            launcher.textContent = RESEARCH_LABELS.launcher;
+            return;
+        }
+
+        launcher.textContent =
+            RESEARCH_LABELS.launcher +
+            ' ' +
+            viewedCount +
+            '/' +
+            totalCount;
+    }
+
+    function createResearchPanel() {
+        let panel = document.getElementById(RESEARCH_UI.panelId);
+
+        if (panel) {
+            return panel;
+        }
+
+        panel = document.createElement('div');
+        panel.id = RESEARCH_UI.panelId;
+
+        Object.assign(panel.style, {
+            position: 'fixed',
+            right: RESEARCH_UI.right,
+            bottom: '54px',
+            zIndex: '2147483647',
+            width: 'min(' + RESEARCH_UI.panelWidth + ', calc(100vw - 24px))',
+            maxHeight: RESEARCH_UI.panelMaxHeight,
+            overflowY: 'auto',
+            background: '#fff',
+            color: '#111',
+            border: '1px solid #888',
+            borderRadius: '10px',
+            boxShadow: '0 3px 16px rgba(0,0,0,.22)',
+            padding: '10px',
+            fontFamily: 'Arial, sans-serif',
+            fontSize: '13px',
+            lineHeight: '1.35'
+        });
+
+        document.body.appendChild(panel);
+
+        return panel;
+    }
+
+    function renderResearchPanelMessage(message) {
+        const panel = createResearchPanel();
+
+        panel.innerHTML = '';
+        panel.style.display = isResearchPanelOpen ? 'block' : 'none';
+
+        if (!isResearchPanelOpen) {
+            return;
+        }
+
+        const messageElement = document.createElement('div');
+        messageElement.textContent = message;
+        messageElement.style.padding = '8px';
+
+        panel.appendChild(messageElement);
+    }
+
+    function createSortLink(task, sortOption) {
+        const sortLink = document.createElement('a');
+        sortLink.textContent = sortOption.label;
+        sortLink.href = buildAmazonSearchUrl(task, sortOption.value);
+
+        Object.assign(sortLink.style, {
+            display: 'inline-block',
+            marginRight: '8px',
+            marginTop: '4px',
+            fontSize: '11px',
+            textDecoration: 'none',
+            color: '#2162a1'
+        });
+
+        if (isSortCurrent(task, sortOption.value)) {
+            sortLink.style.fontWeight = '700';
+            sortLink.style.textDecoration = 'underline';
+        }
+
+        return sortLink;
+    }
+
+    function createResearchTaskRow(task) {
+        const row = document.createElement('div');
+
+        Object.assign(row.style, {
+            padding: '7px 0',
+            borderTop: '1px solid #eee'
+        });
+
+        const firstLine = document.createElement('div');
+
+        Object.assign(firstLine.style, {
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '7px'
+        });
+
+        const viewedCheckbox = document.createElement('input');
+        viewedCheckbox.type = 'checkbox';
+        viewedCheckbox.checked = task.viewed === true;
+        viewedCheckbox.title = 'Viewed';
+
+        viewedCheckbox.addEventListener('change', function () {
+            setResearchTaskViewed(
+                task,
+                viewedCheckbox.checked,
+                viewedCheckbox
+            );
+        });
+
+        const keywordArea = document.createElement('div');
+        keywordArea.style.flex = '1';
+        keywordArea.style.minWidth = '0';
+
+        const keywordLine = document.createElement('div');
+
+        const keywordLink = document.createElement('a');
+        keywordLink.textContent =
+            task.seedKeyword ||
+            task.productRole ||
+            'Open Amazon search';
+
+        keywordLink.href = buildAmazonSearchUrl(
+            task,
+            'exact-aware-popularity-rank'
+        );
+
+        Object.assign(keywordLink.style, {
+            color: '#111',
+            fontWeight: '600',
+            textDecoration: 'none',
+            overflowWrap: 'anywhere'
+        });
+
+        keywordLine.appendChild(keywordLink);
+
+        if (doesTaskMatchCurrentPage(task)) {
+            const currentBadge = document.createElement('span');
+            currentBadge.textContent = ' · ' + RESEARCH_LABELS.currentPage;
+
+            Object.assign(currentBadge.style, {
+                fontSize: '10px',
+                fontWeight: '700',
+                color: '#067d62'
+            });
+
+            keywordLine.appendChild(currentBadge);
+            row.style.background = '#f7fbf9';
+        }
+
+        const productRole = document.createElement('div');
+        productRole.textContent = task.productRole || '';
+
+        Object.assign(productRole.style, {
+            marginTop: '2px',
+            color: '#666',
+            fontSize: '11px'
+        });
+
+        const sortLinks = document.createElement('div');
+
+        AMAZON_SORTS.forEach(function (sortOption) {
+            sortLinks.appendChild(
+                createSortLink(task, sortOption)
+            );
+        });
+
+        keywordArea.appendChild(keywordLine);
+
+        if (task.productRole) {
+            keywordArea.appendChild(productRole);
+        }
+
+        keywordArea.appendChild(sortLinks);
+
+        firstLine.appendChild(viewedCheckbox);
+        firstLine.appendChild(keywordArea);
+        row.appendChild(firstLine);
+
+        return row;
+    }
+
+    function shouldMicroThemeStartOpen(tasks, isFirstIncompleteTheme) {
+        const containsCurrentPage = tasks.some(function (task) {
+            return doesTaskMatchCurrentPage(task);
+        });
+
+        if (containsCurrentPage) {
+            return true;
+        }
+
+        return isFirstIncompleteTheme;
+    }
+
+    function renderMicroThemeGroup(
+        parent,
+        microThemeGroup,
+        isFirstIncompleteTheme
+    ) {
+        const details = document.createElement('details');
+        const progress = getMicroThemeProgress(microThemeGroup.tasks);
+
+        details.open = shouldMicroThemeStartOpen(
+            microThemeGroup.tasks,
+            isFirstIncompleteTheme
+        );
+
+        const summary = document.createElement('summary');
+
+        Object.assign(summary.style, {
+            cursor: 'pointer',
+            fontWeight: '700',
+            padding: '7px 2px'
+        });
+
+        summary.textContent =
+            microThemeGroup.name +
+            ' — ' +
+            progress.viewed +
+            '/' +
+            progress.total +
+            ' viewed';
+
+        details.appendChild(summary);
+
+        microThemeGroup.tasks.forEach(function (task) {
+            details.appendChild(
+                createResearchTaskRow(task)
+            );
+        });
+
+        parent.appendChild(details);
+    }
+
+    function renderEventGroup(parent, eventGroup) {
+        const eventTitle = document.createElement('div');
+        eventTitle.textContent = eventGroup.name;
+
+        Object.assign(eventTitle.style, {
+            fontSize: '14px',
+            fontWeight: '700',
+            padding: '8px 2px 4px',
+            borderBottom: '1px solid #ddd'
+        });
+
+        parent.appendChild(eventTitle);
+
+        let firstIncompleteThemeUsed = false;
+
+        eventGroup.microThemes.forEach(function (microThemeGroup) {
+            const progress = getMicroThemeProgress(microThemeGroup.tasks);
+            const isIncomplete = progress.viewed < progress.total;
+            const isFirstIncompleteTheme =
+                isIncomplete &&
+                firstIncompleteThemeUsed === false;
+
+            if (isFirstIncompleteTheme) {
+                firstIncompleteThemeUsed = true;
+            }
+
+            renderMicroThemeGroup(
+                parent,
+                microThemeGroup,
+                isFirstIncompleteTheme
+            );
+        });
+    }
+
+    function renderResearchPanel() {
+        const launcher = createResearchLauncher();
+        const panel = createResearchPanel();
+
+        updateResearchLauncher();
+
+        panel.style.display = isResearchPanelOpen
+            ? 'block'
+            : 'none';
+
+        if (!isResearchPanelOpen) {
+            return;
         }
 
         panel.innerHTML = '';
 
-        const title = document.createElement('div');
-        title.textContent = item
-            ? `${item.event || ''} → ${item.microTheme || ''}`
-            : 'Research Queue';
-        title.style.fontWeight = '700';
-        title.style.marginBottom = '6px';
+        const header = document.createElement('div');
 
-        const role = document.createElement('div');
-        role.textContent = item ? (item.productRole || '') : 'No unviewed items';
+        Object.assign(header.style, {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            marginBottom: '6px'
+        });
 
-        const keyword = document.createElement('div');
-        keyword.textContent = item ? (item.seedKeyword || '') : '';
-        keyword.style.opacity = '0.75';
-        keyword.style.margin = '4px 0 10px';
+        const title = document.createElement('strong');
+        title.textContent = 'Research Queue';
 
-        panel.appendChild(title);
-        panel.appendChild(role);
-        panel.appendChild(keyword);
+        const refreshButton = document.createElement('button');
+        refreshButton.type = 'button';
+        refreshButton.textContent = '↻';
+        refreshButton.title = 'Reload Research Queue';
+        applyResearchButtonStyle(refreshButton);
 
-        if (!item) return;
+        refreshButton.addEventListener('click', function () {
+            refreshButton.disabled = true;
+            refreshButton.textContent = '…';
 
-        const buttons = document.createElement('div');
-        buttons.style.display = 'flex';
-        buttons.style.gap = '8px';
-
-        const viewedButton = document.createElement('button');
-        viewedButton.textContent = '✓ Viewed';
-
-        const openButton = document.createElement('button');
-        openButton.textContent = 'Open';
-
-        [viewedButton, openButton].forEach(button => {
-            Object.assign(button.style, {
-                padding: '6px 10px',
-                border: '1px solid #888',
-                borderRadius: '6px',
-                background: '#fff',
-                cursor: 'pointer'
+            loadResearchQueue(function () {
+                refreshButton.disabled = false;
+                refreshButton.textContent = '↻';
             });
         });
 
-        viewedButton.addEventListener('click', () => {
-            viewedButton.disabled = true;
-            viewedButton.textContent = 'Saving...';
+        header.appendChild(title);
+        header.appendChild(refreshButton);
+        panel.appendChild(header);
 
-            requestResearchAction('markViewed', { row: item.row }, () => {
-                requestResearchAction('getNextResearch', {}, result => {
-                    const nextItem = result.task || null;
-                    renderResearchPanel(nextItem);
+        if (researchTasks.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.textContent = RESEARCH_LABELS.emptyQueue;
+            emptyState.style.padding = '8px 2px';
 
-                    if (nextItem) {
-                        window.location.href = buildAmazonSearchUrl(
-                            nextItem.seedKeyword,
-                            nextItem.urlOverride
-                        );
-                    }
-                });
-            });
+            panel.appendChild(emptyState);
+            return;
+        }
+
+        const eventGroups = groupResearchTasksByEventAndTheme(
+            researchTasks
+        );
+
+        eventGroups.forEach(function (eventGroup) {
+            renderEventGroup(panel, eventGroup);
         });
-
-        openButton.addEventListener('click', () => {
-            window.location.href = buildAmazonSearchUrl(
-                item.seedKeyword,
-                item.urlOverride
-            );
-        });
-
-        buttons.appendChild(viewedButton);
-        buttons.appendChild(openButton);
-        panel.appendChild(buttons);
     }
 
-    function initResearchQueuePanel() {
-        requestResearchAction('getNextResearch', {}, result => {
-            renderResearchPanel(result.task || null);
-        });
+    function initializeResearchQueue() {
+        createResearchLauncher();
+        updateResearchLauncher();
+
+        loadResearchQueue();
     }
 
     function addButtonToCard(card) {
@@ -630,7 +1238,7 @@
     }
 
     scanProducts();
-    initResearchQueuePanel();
+    initializeResearchQueue();
 
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.body, {
