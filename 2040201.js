@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amazon → Google Sheets
 // @namespace    local.amazon.sheet
-// @version      1.6.1
+// @version      1.6.2
 // @description  Cross-browser Amazon → Google Sheets collector with self-update and local Apps Script configuration
 // @match        https://www.amazon.com/*
 // @grant        GM_xmlhttpRequest
@@ -426,7 +426,8 @@
         fullscreen: '⛶',
         exitFullscreen: '🗗',
         expandAll: 'Expand all',
-        collapseAll: 'Collapse all'
+        collapseAll: 'Collapse all',
+        minimizePanel: '−'
     };
 
     const AMAZON_SORTS = [
@@ -657,7 +658,7 @@
         });
     }
 
-    function loadResearchQueue(onLoaded) {
+    function loadResearchQueue(onLoaded, onFinished) {
         requestResearchAction(
             'getResearchQueue',
             {},
@@ -672,9 +673,17 @@
                 if (typeof onLoaded === 'function') {
                     onLoaded(researchTasks);
                 }
+
+                if (typeof onFinished === 'function') {
+                    onFinished();
+                }
             },
             function (message) {
                 renderResearchPanelMessage(message);
+
+                if (typeof onFinished === 'function') {
+                    onFinished();
+                }
             }
         );
     }
@@ -1108,6 +1117,21 @@
         });
     }
 
+    function setResearchPanelLoading(isLoading) {
+        const panel = createResearchPanel();
+
+        if (isLoading) {
+            panel.style.pointerEvents = 'none';
+            panel.style.opacity = '0.62';
+            panel.setAttribute('aria-busy', 'true');
+            return;
+        }
+
+        panel.style.pointerEvents = 'auto';
+        panel.style.opacity = '1';
+        panel.removeAttribute('aria-busy');
+    }
+
     function applyResearchPanelSize(panel) {
         if (isResearchPanelFullscreen) {
             panel.style.top = RESEARCH_UI.fullscreenPadding;
@@ -1167,11 +1191,17 @@
         const header = document.createElement('div');
 
         Object.assign(header.style, {
+            position: 'sticky',
+            top: '0',
+            zIndex: '5',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: '8px',
-            marginBottom: '6px'
+            margin: '-10px -10px 6px',
+            padding: '10px',
+            background: '#fff',
+            borderBottom: '1px solid #ddd'
         });
 
         const title = document.createElement('strong');
@@ -1221,6 +1251,17 @@
             toggleResearchPanelFullscreen();
         });
 
+        const minimizeButton = document.createElement('button');
+        minimizeButton.type = 'button';
+        minimizeButton.textContent = RESEARCH_LABELS.minimizePanel;
+        minimizeButton.title = 'Collapse panel';
+        applyResearchButtonStyle(minimizeButton);
+
+        minimizeButton.addEventListener('click', function () {
+            isResearchPanelOpen = false;
+            renderResearchPanel();
+        });
+
         const refreshButton = document.createElement('button');
         refreshButton.type = 'button';
         refreshButton.textContent = '↻';
@@ -1230,17 +1271,30 @@
         refreshButton.addEventListener('click', function () {
             refreshButton.disabled = true;
             refreshButton.textContent = '…';
+            setResearchPanelLoading(true);
 
-            loadResearchQueue(function () {
-                refreshButton.disabled = false;
-                refreshButton.textContent = '↻';
-            });
+            loadResearchQueue(
+                null,
+                function () {
+                    setResearchPanelLoading(false);
+
+                    const currentRefreshButton = document.querySelector(
+                        '#' + RESEARCH_UI.panelId + ' button[title="Reload Research Queue"]'
+                    );
+
+                    if (currentRefreshButton) {
+                        currentRefreshButton.disabled = false;
+                        currentRefreshButton.textContent = '↻';
+                    }
+                }
+            );
         });
 
         controls.appendChild(expandAllButton);
         controls.appendChild(collapseAllButton);
         controls.appendChild(fullscreenButton);
         controls.appendChild(refreshButton);
+        controls.appendChild(minimizeButton);
 
         header.appendChild(title);
         header.appendChild(controls);
